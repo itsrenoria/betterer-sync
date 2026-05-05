@@ -51,7 +51,7 @@ export class SyncService {
   async backfill(options: { startAt?: string; completeMessage?: string } = {}): Promise<SyncStats> {
     const stats = emptyStats();
     const existingWatched = await this.publicMetaDB.getAllWatched();
-    const adoptionIndex = new AdoptionIndex(existingWatched);
+    const adoptionIndex = new AdoptionIndex(existingWatched, mappedPublicMetaDBIds(this.db.listActiveSyncedEntries()));
 
     for await (const page of this.trakt.getHistory({ startAt: options.startAt, limit: this.pageLimit })) {
       await this.syncPage(page, adoptionIndex, stats);
@@ -70,7 +70,7 @@ export class SyncService {
   async reconcile(): Promise<SyncStats> {
     const stats = emptyStats();
     const existingWatched = await this.publicMetaDB.getAllWatched();
-    const adoptionIndex = new AdoptionIndex(existingWatched);
+    const adoptionIndex = new AdoptionIndex(existingWatched, mappedPublicMetaDBIds(this.db.listActiveSyncedEntries()));
     const publicMetaDBIds = new Set(existingWatched.map((item) => item.id));
     const publicMetaDBById = indexPublicMetaDBById(existingWatched);
     const current = new Map<number, TransformedHistoryItem>();
@@ -110,9 +110,10 @@ export class SyncService {
 
   async audit(): Promise<SyncAuditReport> {
     const existingWatched = await this.publicMetaDB.getAllWatched();
-    const adoptionIndex = new AdoptionIndex(existingWatched);
     const publicMetaDBById = indexPublicMetaDBById(existingWatched);
-    const dbRowsByHistoryId = indexSyncRowsByHistoryId(this.db.listSyncEntries());
+    const dbRows = this.db.listSyncEntries();
+    const adoptionIndex = new AdoptionIndex(existingWatched, mappedPublicMetaDBIds(dbRows));
+    const dbRowsByHistoryId = indexSyncRowsByHistoryId(dbRows);
     const historyIdCounts = new Map<number, number>();
     const missingSamples: SyncAuditSample[] = [];
     const mappedChangedSamples: SyncAuditMappedChangeSample[] = [];
@@ -139,23 +140,28 @@ export class SyncService {
         }
 
         transformable++;
-        const matched = adoptionIndex.takeExact(transformed);
-        if (matched) {
-          exactMatches++;
-          continue;
-        }
-
         const row = dbRowsByHistoryId.get(transformed.traktHistoryId);
-        const mapped = row?.publicmetadb_id ? publicMetaDBById.get(row.publicmetadb_id) : undefined;
-        if (row?.publicmetadb_id && !mapped) {
+        const mappedId = activePublicMetaDBId(row);
+        const mapped = mappedId ? publicMetaDBById.get(mappedId) : undefined;
+        if (mappedId && !mapped) {
           mappedMissingById++;
           missing++;
           pushSample(mappedMissingSamples, sampleForItem(transformed));
           continue;
         }
-        if (row?.publicmetadb_id && mapped) {
+        if (mappedId && mapped) {
+          if (publicMetaDBItemMatches(mapped, transformed)) {
+            exactMatches++;
+            continue;
+          }
           mappedChanged++;
           pushSample(mappedChangedSamples, sampleForMappedChange(transformed, mapped));
+          continue;
+        }
+
+        const matched = adoptionIndex.takeExact(transformed);
+        if (matched) {
+          exactMatches++;
           continue;
         }
 
@@ -239,6 +245,7 @@ export class SyncService {
         return;
       }
 
+      adoptionIndex.markUsed(existing.publicmetadb_id);
       this.db.markSeen(item.traktHistoryId);
       stats.skipped++;
       return;
@@ -259,6 +266,7 @@ export class SyncService {
   ): Promise<void> {
     try {
       await this.publicMetaDB.patchWatched(publicMetaDBId, { watched_at: item.watchedAt });
+      adoptionIndex.markUsed(publicMetaDBId);
       this.db.upsertSyncedEntry(item, publicMetaDBId);
       stats.updated++;
       this.logger.info(`Updated PublicMetaDB timestamp: ${describeHistoryItem(item)} (${previousWatchedAt ?? 'unknown time'} -> ${item.watchedAt})`, {
@@ -290,6 +298,7 @@ export class SyncService {
     }
 
     const created = await this.publicMetaDB.createWatched(toPublicMetaDBInput(item));
+    adoptionIndex.markUsed(created.id);
     this.db.upsertSyncedEntry(item, created.id);
     stats.imported++;
     this.logger.info(`Added to PublicMetaDB: ${describeHistoryItem(item)}`, {
@@ -334,6 +343,7 @@ export class SyncService {
         publicMetaDBId: row.publicmetadb_id,
         actual: describePublicMetaDBItem(mappedItem),
       });
+      adoptionIndex.markUsed(row.publicmetadb_id);
       try {
         await this.publicMetaDB.deleteWatched(row.publicmetadb_id);
       } catch (error) {
@@ -536,6 +546,19 @@ function indexSyncRowsByHistoryId(rows: SyncEntryRow[]): Map<number, SyncEntryRo
   return new Map(rows.map((row) => [row.trakt_history_id, row]));
 }
 
+function mappedPublicMetaDBIds(rows: SyncEntryRow[]): string[] {
+  return rows
+    .map((row) => activePublicMetaDBId(row))
+    .filter((id): id is string => id !== null);
+}
+
+function activePublicMetaDBId(row: SyncEntryRow | undefined): string | null {
+  if (!row || row.sync_status !== 'synced') {
+    return null;
+  }
+  return row.publicmetadb_id;
+}
+
 function publicMetaDBItemMatches(item: PublicMetaDBWatchedItem, expected: TransformedHistoryItem): boolean {
   return watchedKey({
     mediaType: item.media_type,
@@ -606,7 +629,11 @@ class AdoptionIndex {
   private readonly entries = new Map<string, PublicMetaDBWatchedItem[]>();
   private readonly used = new Set<string>();
 
-  constructor(items: PublicMetaDBWatchedItem[]) {
+  constructor(items: PublicMetaDBWatchedItem[], usedIds: Iterable<string> = []) {
+    for (const id of usedIds) {
+      this.used.add(id);
+    }
+
     for (const item of items) {
       const key = watchedKey({
         mediaType: item.media_type,
@@ -635,6 +662,12 @@ class AdoptionIndex {
       this.used.add(candidate.id);
     }
     return candidate;
+  }
+
+  markUsed(id: string | null | undefined): void {
+    if (id) {
+      this.used.add(id);
+    }
   }
 }
 

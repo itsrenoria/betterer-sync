@@ -183,6 +183,36 @@ describe('SyncService', () => {
     expect(publicMetaDB.watched[0].watched_at).toBe('2024-03-10T08:15:00Z');
   });
 
+  it('audits mapped PublicMetaDB rows before anonymous exact adoption', async () => {
+    publicMetaDB.watched = [
+      { id: 'pm_mapped', tmdb_id: 550, media_type: 'movie', season: null, episode: null, watched_at: '2024-03-10 08:15:00.000Z' },
+    ];
+    db.upsertSyncedEntry({
+      kind: 'ok',
+      traktHistoryId: 2,
+      mediaType: 'movie',
+      tmdbId: 550,
+      season: null,
+      episode: null,
+      watchedAt: '2024-03-10T08:15:00.000Z',
+      action: 'watch',
+      source: movie(2, 550, '2024-03-10T08:15:00.000Z'),
+    }, 'pm_mapped');
+    trakt.history = [
+      movie(1, 550, '2024-03-10T08:15:00.000Z'),
+      movie(2, 550, '2024-03-10T08:15:00.000Z'),
+    ];
+
+    const report = await service.audit();
+
+    expect(report).toMatchObject({
+      exactMatches: 1,
+      mappedChanged: 0,
+      missing: 1,
+    });
+    expect(report.missingSamples[0]).toMatchObject({ traktHistoryId: 1 });
+  });
+
   it('persists failed new rows so missing writes can be diagnosed', async () => {
     trakt.history = [movie(1, 550, '2024-03-10T08:15:00Z')];
     publicMetaDB.createWatched = async () => {
