@@ -185,7 +185,7 @@ describe('SyncService', () => {
 
   it('audits mapped PublicMetaDB rows before anonymous exact adoption', async () => {
     publicMetaDB.watched = [
-      { id: 'pm_mapped', tmdb_id: 980431, media_type: 'movie', season: null, episode: null, watched_at: '2026-04-21 15:44:00.000Z' },
+      { id: 'pm_mapped', tmdb_id: 980431, media_type: 'movie', season: 0, episode: 0, watched_at: '2026-04-21 15:44:00.000Z' },
     ];
     db.upsertSyncedEntry({
       kind: 'ok',

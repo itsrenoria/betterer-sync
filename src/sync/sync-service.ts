@@ -560,26 +560,11 @@ function activePublicMetaDBId(row: SyncEntryRow | undefined): string | null {
 }
 
 function publicMetaDBItemMatches(item: PublicMetaDBWatchedItem, expected: TransformedHistoryItem): boolean {
-  return watchedKey({
-    mediaType: item.media_type,
-    tmdbId: item.tmdb_id,
-    season: item.season ?? null,
-    episode: item.episode ?? null,
-    watchedAt: item.watched_at,
-  }) === watchedKey({
-    mediaType: expected.mediaType,
-    tmdbId: expected.tmdbId,
-    season: expected.season,
-    episode: expected.episode,
-    watchedAt: expected.watchedAt,
-  });
+  return watchedKey(publicMetaDBKeyInput(item)) === watchedKey(transformedKeyInput(expected));
 }
 
 function samePublicMetaDBTarget(item: PublicMetaDBWatchedItem, expected: TransformedHistoryItem): boolean {
-  return item.media_type === expected.mediaType
-    && item.tmdb_id === expected.tmdbId
-    && (item.season ?? null) === expected.season
-    && (item.episode ?? null) === expected.episode;
+  return watchedTargetKey(publicMetaDBKeyInput(item)) === watchedTargetKey(transformedKeyInput(expected));
 }
 
 function parseSourcePayload(payload: string | null): TraktHistoryItem {
@@ -679,12 +664,45 @@ function watchedKey(input: {
   watchedAt: string | null;
 }): string {
   return [
-    input.mediaType,
-    input.tmdbId,
-    input.season ?? '',
-    input.episode ?? '',
+    watchedTargetKey(input),
     normalizeTimestamp(input.watchedAt),
   ].join('|');
+}
+
+function watchedTargetKey(input: {
+  mediaType: string;
+  tmdbId: number;
+  season: number | null;
+  episode: number | null;
+}): string {
+  const season = input.mediaType === 'movie' ? '' : input.season ?? '';
+  const episode = input.mediaType === 'movie' ? '' : input.episode ?? '';
+  return [
+    input.mediaType,
+    input.tmdbId,
+    season,
+    episode,
+  ].join('|');
+}
+
+function publicMetaDBKeyInput(item: PublicMetaDBWatchedItem) {
+  return {
+    mediaType: item.media_type,
+    tmdbId: item.tmdb_id,
+    season: item.season ?? null,
+    episode: item.episode ?? null,
+    watchedAt: item.watched_at,
+  };
+}
+
+function transformedKeyInput(item: TransformedHistoryItem) {
+  return {
+    mediaType: item.mediaType,
+    tmdbId: item.tmdbId,
+    season: item.season,
+    episode: item.episode,
+    watchedAt: item.watchedAt,
+  };
 }
 
 function normalizeTimestamp(value: string | null): string {
