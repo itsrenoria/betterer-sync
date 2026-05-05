@@ -36,6 +36,13 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (command === 'audit') {
+    await withService(async (service) => {
+      await service.audit();
+    });
+    return;
+  }
+
   if (command === 'serve') {
     await runServe();
     return;
@@ -180,6 +187,7 @@ Commands:
   auth       Authorize Trakt with device code flow and save tokens
   backfill   Import all Trakt watch history into PublicMetaDB
   reconcile  Run a full mirror reconciliation
+  audit      Compare Trakt, local sync state, and PublicMetaDB without changing anything
   serve      Run startup backfill, polling sync, reconciliation, and /healthz
 `);
 }

@@ -54,10 +54,13 @@ curl http://localhost:3000/healthz
 docker compose run --rm betterer-sync auth
 docker compose run --rm betterer-sync backfill
 docker compose run --rm betterer-sync reconcile
+docker compose run --rm betterer-sync audit
 docker compose up -d
 ```
 
 `serve` is the default command. It runs a startup backfill, polls recent Trakt history every `POLL_INTERVAL_SECONDS`, and performs full reconciliation every `RECONCILE_INTERVAL_HOURS`.
+
+`audit` is read-only. It fetches all Trakt history, compares it with local sync state and exact PublicMetaDB watched rows, then logs counts and samples for missing, unresolved, failed, or duplicate history rows.
 
 ## Environment
 

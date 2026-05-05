@@ -72,6 +72,31 @@ export type SyncStats = {
   deleted: number;
 };
 
+export type SyncEntryStatus = 'synced' | 'retry' | 'failed' | 'deleted';
+
+export type SyncAuditSample = {
+  traktHistoryId: number;
+  title: string;
+  media: string;
+  watchedAt: string;
+  reason?: string;
+};
+
+export type SyncAuditReport = {
+  traktItems: number;
+  uniqueTraktHistoryIds: number;
+  duplicateTraktHistoryIds: number;
+  transformable: number;
+  unresolved: number;
+  publicMetaDBItems: number;
+  exactMatches: number;
+  missing: number;
+  dbStatusCounts: Record<SyncEntryStatus, number>;
+  missingSamples: SyncAuditSample[];
+  unresolvedSamples: SyncAuditSample[];
+  duplicateHistoryIdSamples: Array<{ traktHistoryId: number; count: number }>;
+};
+
 export type SyncServiceDeps = {
   db: import('../storage/database.js').SyncDatabase;
   trakt: TraktClientLike;

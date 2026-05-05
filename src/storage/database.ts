@@ -119,12 +119,45 @@ export class SyncDatabase {
     });
   }
 
-  markFailed(traktHistoryId: number, errorMessage: string): void {
+  markFailed(item: TransformedHistoryItem, errorMessage: string): void {
+    const now = new Date().toISOString();
     this.sqlite.prepare(`
-      UPDATE sync_entries
-      SET sync_status = 'failed', error_message = @errorMessage, updated_at = @now
-      WHERE trakt_history_id = @traktHistoryId
-    `).run({ traktHistoryId, errorMessage, now: new Date().toISOString() });
+      INSERT INTO sync_entries (
+        trakt_history_id, publicmetadb_id, media_type, tmdb_id, season, episode,
+        watched_at, action, source_payload, sync_status, error_message,
+        last_seen_at, created_at, updated_at
+      )
+      VALUES (
+        @trakt_history_id, NULL, @media_type, @tmdb_id, @season, @episode,
+        @watched_at, @action, @source_payload, 'failed', @error_message,
+        @last_seen_at, @created_at, @updated_at
+      )
+      ON CONFLICT(trakt_history_id) DO UPDATE SET
+        media_type = excluded.media_type,
+        tmdb_id = excluded.tmdb_id,
+        season = excluded.season,
+        episode = excluded.episode,
+        watched_at = excluded.watched_at,
+        action = excluded.action,
+        source_payload = excluded.source_payload,
+        sync_status = 'failed',
+        error_message = excluded.error_message,
+        last_seen_at = excluded.last_seen_at,
+        updated_at = excluded.updated_at
+    `).run({
+      trakt_history_id: item.traktHistoryId,
+      media_type: item.mediaType,
+      tmdb_id: item.tmdbId,
+      season: item.season,
+      episode: item.episode,
+      watched_at: item.watchedAt,
+      action: item.action,
+      source_payload: JSON.stringify(item.source),
+      error_message: errorMessage,
+      last_seen_at: now,
+      created_at: now,
+      updated_at: now,
+    });
   }
 
   markDeleted(traktHistoryId: number): void {

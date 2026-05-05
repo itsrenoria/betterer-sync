@@ -4,6 +4,9 @@ import { transformTraktHistoryItem } from './transform.js';
 import type {
   PublicMetaDBClientLike,
   PublicMetaDBWatchedItem,
+  SyncAuditReport,
+  SyncAuditSample,
+  SyncEntryStatus,
   SyncServiceDeps,
   SyncStats,
   TraktHistoryItem,
@@ -19,6 +22,15 @@ const emptyStats = (): SyncStats => ({
   failed: 0,
   deleted: 0,
 });
+
+const emptyStatusCounts = (): Record<SyncEntryStatus, number> => ({
+  synced: 0,
+  retry: 0,
+  failed: 0,
+  deleted: 0,
+});
+
+const AUDIT_SAMPLE_LIMIT = 20;
 
 export class SyncService {
   private readonly db: SyncDatabase;
@@ -88,6 +100,71 @@ export class SyncService {
     return stats;
   }
 
+  async audit(): Promise<SyncAuditReport> {
+    const existingWatched = await this.publicMetaDB.getAllWatched();
+    const adoptionIndex = new AdoptionIndex(existingWatched);
+    const historyIdCounts = new Map<number, number>();
+    const missingSamples: SyncAuditSample[] = [];
+    const unresolvedSamples: SyncAuditSample[] = [];
+    let traktItems = 0;
+    let transformable = 0;
+    let unresolved = 0;
+    let exactMatches = 0;
+    let missing = 0;
+
+    for await (const page of this.trakt.getHistory({ limit: this.pageLimit })) {
+      for (const rawItem of page) {
+        traktItems++;
+        historyIdCounts.set(rawItem.id, (historyIdCounts.get(rawItem.id) ?? 0) + 1);
+
+        const transformed = await transformTraktHistoryItem(rawItem, this.publicMetaDB);
+        if (transformed.kind === 'retry') {
+          unresolved++;
+          pushSample(unresolvedSamples, sampleForRawItem(transformed.source, transformed.reason));
+          continue;
+        }
+
+        transformable++;
+        const matched = adoptionIndex.takeExact(transformed);
+        if (matched) {
+          exactMatches++;
+        } else {
+          missing++;
+          pushSample(missingSamples, sampleForItem(transformed));
+        }
+      }
+    }
+
+    const duplicateHistoryIdSamples = [...historyIdCounts.entries()]
+      .filter(([, count]) => count > 1)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, AUDIT_SAMPLE_LIMIT)
+      .map(([traktHistoryId, count]) => ({ traktHistoryId, count }));
+
+    const dbStatusCounts = emptyStatusCounts();
+    for (const row of this.db.listSyncEntries()) {
+      dbStatusCounts[row.sync_status] = (dbStatusCounts[row.sync_status] ?? 0) + 1;
+    }
+
+    const report: SyncAuditReport = {
+      traktItems,
+      uniqueTraktHistoryIds: historyIdCounts.size,
+      duplicateTraktHistoryIds: [...historyIdCounts.values()].filter((count) => count > 1).length,
+      transformable,
+      unresolved,
+      publicMetaDBItems: existingWatched.length,
+      exactMatches,
+      missing,
+      dbStatusCounts,
+      missingSamples,
+      unresolvedSamples,
+      duplicateHistoryIdSamples,
+    };
+
+    this.logAudit(report);
+    return report;
+  }
+
   private async syncPage(
     page: TraktHistoryItem[],
     adoptionIndex: AdoptionIndex,
@@ -107,7 +184,7 @@ export class SyncService {
       try {
         await this.syncItem(transformed, adoptionIndex, stats);
       } catch (error) {
-        this.db.markFailed(transformed.traktHistoryId, toErrorMessage(error));
+        this.db.markFailed(transformed, toErrorMessage(error));
         stats.failed++;
         this.logger.error(`Failed to sync Trakt play: ${describeHistoryItem(transformed)}`, {
           traktHistoryId: transformed.traktHistoryId,
@@ -209,6 +286,38 @@ export class SyncService {
   private logStats(message: string, stats: SyncStats): void {
     this.logger.info(message, stats);
   }
+
+  private logAudit(report: SyncAuditReport): void {
+    this.logger.info('audit complete', {
+      traktItems: report.traktItems,
+      uniqueTraktHistoryIds: report.uniqueTraktHistoryIds,
+      duplicateTraktHistoryIds: report.duplicateTraktHistoryIds,
+      transformable: report.transformable,
+      unresolved: report.unresolved,
+      publicMetaDBItems: report.publicMetaDBItems,
+      exactMatches: report.exactMatches,
+      missing: report.missing,
+      dbSynced: report.dbStatusCounts.synced,
+      dbRetry: report.dbStatusCounts.retry,
+      dbFailed: report.dbStatusCounts.failed,
+      dbDeleted: report.dbStatusCounts.deleted,
+    });
+
+    for (const sample of report.missingSamples) {
+      this.logger.warn(`Audit missing from PublicMetaDB: ${sample.title} (${sample.media}) watched at ${sample.watchedAt}`, {
+        traktHistoryId: sample.traktHistoryId,
+      });
+    }
+    for (const sample of report.unresolvedSamples) {
+      this.logger.warn(`Audit unresolved Trakt play: ${sample.title} (${sample.media}) watched at ${sample.watchedAt}`, {
+        traktHistoryId: sample.traktHistoryId,
+        reason: sample.reason,
+      });
+    }
+    for (const sample of report.duplicateHistoryIdSamples) {
+      this.logger.warn('Audit duplicate Trakt history id returned by API', sample);
+    }
+  }
 }
 
 function toPublicMetaDBInput(item: TransformedHistoryItem) {
@@ -223,6 +332,39 @@ function toPublicMetaDBInput(item: TransformedHistoryItem) {
 
 function describeHistoryItem(item: TransformedHistoryItem): string {
   return `${titleFromSource(item.source, item)} (${mediaLabel(item)}) watched at ${item.watchedAt}`;
+}
+
+function sampleForItem(item: TransformedHistoryItem): SyncAuditSample {
+  return {
+    traktHistoryId: item.traktHistoryId,
+    title: titleFromSource(item.source, item),
+    media: mediaLabel(item),
+    watchedAt: item.watchedAt,
+  };
+}
+
+function sampleForRawItem(item: TraktHistoryItem, reason: string): SyncAuditSample {
+  const fallback: TransformedHistoryItem = {
+    kind: 'ok',
+    traktHistoryId: item.id,
+    mediaType: item.type === 'movie' ? 'movie' : 'tv',
+    tmdbId: readNumber(readIdsFromRaw(item).tmdb) ?? 0,
+    season: readNumber(readRecord(item.episode).season),
+    episode: readNumber(readRecord(item.episode).number),
+    watchedAt: item.watched_at,
+    action: typeof item.action === 'string' ? item.action : null,
+    source: item,
+  };
+  return {
+    ...sampleForItem(fallback),
+    reason,
+  };
+}
+
+function pushSample(samples: SyncAuditSample[], sample: SyncAuditSample): void {
+  if (samples.length < AUDIT_SAMPLE_LIMIT) {
+    samples.push(sample);
+  }
 }
 
 function describeRawHistoryItem(item: TraktHistoryItem): string {

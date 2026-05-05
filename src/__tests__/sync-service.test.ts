@@ -171,6 +171,58 @@ describe('SyncService', () => {
     expect(publicMetaDB.watched).toHaveLength(1);
     expect(db.getSyncEntry(1)?.publicmetadb_id).toBe('pm_2');
   });
+
+  it('persists failed new rows so missing writes can be diagnosed', async () => {
+    trakt.history = [movie(1, 550, '2024-03-10T08:15:00Z')];
+    publicMetaDB.createWatched = async () => {
+      throw new Error('PublicMetaDB unavailable');
+    };
+
+    const stats = await service.backfill();
+
+    expect(stats.failed).toBe(1);
+    expect(db.getSyncEntry(1)).toMatchObject({
+      sync_status: 'failed',
+      error_message: 'PublicMetaDB unavailable',
+      tmdb_id: 550,
+      watched_at: '2024-03-10T08:15:00Z',
+    });
+  });
+
+  it('audits missing PublicMetaDB plays, unresolved items, and duplicate Trakt history ids', async () => {
+    publicMetaDB.watched = [
+      { id: 'pm_existing', tmdb_id: 550, media_type: 'movie', season: null, episode: null, watched_at: '2024-03-10T08:15:00.000Z' },
+    ];
+    trakt.history = [
+      movie(1, 550, '2024-03-10T08:15:00Z'),
+      movie(2, 551, '2024-03-11T08:15:00Z'),
+      movie(2, 551, '2024-03-11T08:15:00Z'),
+      movieWithoutTmdb(3, '2024-03-12T08:15:00Z'),
+    ];
+
+    const report = await service.audit();
+
+    expect(report).toMatchObject({
+      traktItems: 4,
+      uniqueTraktHistoryIds: 3,
+      duplicateTraktHistoryIds: 1,
+      transformable: 3,
+      unresolved: 1,
+      publicMetaDBItems: 1,
+      exactMatches: 1,
+      missing: 2,
+    });
+    expect(report.missingSamples[0]).toMatchObject({
+      traktHistoryId: 2,
+      title: 'Movie 551',
+      watchedAt: '2024-03-11T08:15:00Z',
+    });
+    expect(report.unresolvedSamples[0]).toMatchObject({
+      traktHistoryId: 3,
+      reason: 'Unable to resolve TMDB ID for movie history item 3',
+    });
+    expect(report.duplicateHistoryIdSamples).toEqual([{ traktHistoryId: 2, count: 2 }]);
+  });
 });
 
 function movie(id: number, tmdb: number, watchedAt: string) {
@@ -180,5 +232,15 @@ function movie(id: number, tmdb: number, watchedAt: string) {
     watched_at: watchedAt,
     action: 'watch',
     movie: { ids: { trakt: id + 1000, tmdb } },
+  };
+}
+
+function movieWithoutTmdb(id: number, watchedAt: string) {
+  return {
+    id,
+    type: 'movie',
+    watched_at: watchedAt,
+    action: 'watch',
+    movie: { title: `Missing Movie ${id}`, ids: { trakt: id + 1000 } },
   };
 }
