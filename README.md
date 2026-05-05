@@ -60,7 +60,7 @@ docker compose up -d
 
 `serve` is the default command. It runs a startup backfill, polls recent Trakt history every `POLL_INTERVAL_SECONDS`, and performs full reconciliation every `RECONCILE_INTERVAL_HOURS`.
 
-`audit` is read-only. It fetches all Trakt history, compares it with local sync state and exact PublicMetaDB watched rows, then logs counts and samples for missing, unresolved, failed, or duplicate history rows.
+`audit` is read-only. It fetches all Trakt movie and episode history, compares it with local sync state and PublicMetaDB watched rows, then logs counts and samples for missing, mapped-but-drifted, unresolved, failed, or duplicate history rows.
 
 ## Environment
 

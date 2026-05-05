@@ -82,6 +82,12 @@ export type SyncAuditSample = {
   reason?: string;
 };
 
+export type SyncAuditMappedChangeSample = SyncAuditSample & {
+  publicMetaDBId: string;
+  actualMedia: string;
+  actualWatchedAt: string | null;
+};
+
 export type SyncAuditReport = {
   traktItems: number;
   uniqueTraktHistoryIds: number;
@@ -90,9 +96,13 @@ export type SyncAuditReport = {
   unresolved: number;
   publicMetaDBItems: number;
   exactMatches: number;
+  mappedChanged: number;
+  mappedMissingById: number;
   missing: number;
   dbStatusCounts: Record<SyncEntryStatus, number>;
   missingSamples: SyncAuditSample[];
+  mappedChangedSamples: SyncAuditMappedChangeSample[];
+  mappedMissingSamples: SyncAuditSample[];
   unresolvedSamples: SyncAuditSample[];
   duplicateHistoryIdSamples: Array<{ traktHistoryId: number; count: number }>;
 };

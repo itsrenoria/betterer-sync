@@ -29,6 +29,11 @@ type TokenResponse = {
   created_at?: number;
 };
 
+const HISTORY_PATHS = [
+  '/sync/history/movies',
+  '/sync/history/episodes',
+] as const;
+
 export class TraktClient implements TraktClientLike {
   private readonly baseUrl: string;
   private readonly clientId: string;
@@ -81,9 +86,20 @@ export class TraktClient implements TraktClientLike {
   }
 
   async *getHistory(options: { startAt?: string; endAt?: string; limit?: number } = {}): AsyncGenerator<TraktHistoryItem[]> {
+    for (const path of HISTORY_PATHS) {
+      for await (const page of this.getHistoryFromPath(path, options)) {
+        yield page;
+      }
+    }
+  }
+
+  private async *getHistoryFromPath(
+    path: typeof HISTORY_PATHS[number],
+    options: { startAt?: string; endAt?: string; limit?: number },
+  ): AsyncGenerator<TraktHistoryItem[]> {
     const limit = options.limit ?? 100;
     for (let page = 1; ; page++) {
-      const { data, response } = await this.requestAuthed<TraktHistoryItem[]>('/users/me/history', {
+      const { data, response } = await this.requestAuthed<TraktHistoryItem[]>(path, {
         page,
         limit,
         ...(options.startAt ? { start_at: options.startAt } : {}),

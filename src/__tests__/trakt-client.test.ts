@@ -88,4 +88,38 @@ describe('TraktClient headers', () => {
       Authorization: 'Bearer access-token',
     });
   });
+
+  it('uses private sync history media endpoints for complete account history', async () => {
+    const urls: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string, _init?: RequestInit) => {
+      urls.push(url);
+      return Response.json([], { headers: { 'X-Pagination-Page-Count': '1' } });
+    }));
+
+    const db = {
+      getToken: vi.fn(() => ({
+        access_token: 'access-token',
+        refresh_token: 'refresh-token',
+        token_type: 'bearer',
+        scope: 'public',
+        expires_at: Math.floor(Date.now() / 1000) + 3600,
+      })),
+    };
+    const client = new TraktClient({
+      baseUrl: 'https://api.trakt.tv',
+      clientId: 'client-id',
+      clientSecret: 'client-secret',
+      redirectUri: 'urn:ietf:wg:oauth:2.0:oob',
+      db: db as never,
+    });
+
+    for await (const _page of client.getHistory({ limit: 100 })) {
+      // no pages expected
+    }
+
+    expect(urls.map((url) => new URL(url).pathname)).toEqual([
+      '/sync/history/movies',
+      '/sync/history/episodes',
+    ]);
+  });
 });

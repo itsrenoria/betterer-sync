@@ -4,6 +4,7 @@ import { transformTraktHistoryItem } from './transform.js';
 import type {
   PublicMetaDBClientLike,
   PublicMetaDBWatchedItem,
+  SyncAuditMappedChangeSample,
   SyncAuditReport,
   SyncAuditSample,
   SyncEntryStatus,
@@ -71,6 +72,7 @@ export class SyncService {
     const existingWatched = await this.publicMetaDB.getAllWatched();
     const adoptionIndex = new AdoptionIndex(existingWatched);
     const publicMetaDBIds = new Set(existingWatched.map((item) => item.id));
+    const publicMetaDBById = indexPublicMetaDBById(existingWatched);
     const current = new Map<number, TransformedHistoryItem>();
 
     for await (const page of this.trakt.getHistory({ limit: this.pageLimit })) {
@@ -92,6 +94,12 @@ export class SyncService {
 
       if (row.publicmetadb_id && !publicMetaDBIds.has(row.publicmetadb_id)) {
         await this.createOrAdopt(currentItem, adoptionIndex, stats);
+        continue;
+      }
+
+      const mappedItem = row.publicmetadb_id ? publicMetaDBById.get(row.publicmetadb_id) : undefined;
+      if (mappedItem && !publicMetaDBItemMatches(mappedItem, currentItem)) {
+        await this.repairMappedRow(currentItem, row, mappedItem, adoptionIndex, stats);
       }
     }
 
@@ -103,13 +111,19 @@ export class SyncService {
   async audit(): Promise<SyncAuditReport> {
     const existingWatched = await this.publicMetaDB.getAllWatched();
     const adoptionIndex = new AdoptionIndex(existingWatched);
+    const publicMetaDBById = indexPublicMetaDBById(existingWatched);
+    const dbRowsByHistoryId = indexSyncRowsByHistoryId(this.db.listSyncEntries());
     const historyIdCounts = new Map<number, number>();
     const missingSamples: SyncAuditSample[] = [];
+    const mappedChangedSamples: SyncAuditMappedChangeSample[] = [];
+    const mappedMissingSamples: SyncAuditSample[] = [];
     const unresolvedSamples: SyncAuditSample[] = [];
     let traktItems = 0;
     let transformable = 0;
     let unresolved = 0;
     let exactMatches = 0;
+    let mappedChanged = 0;
+    let mappedMissingById = 0;
     let missing = 0;
 
     for await (const page of this.trakt.getHistory({ limit: this.pageLimit })) {
@@ -128,10 +142,25 @@ export class SyncService {
         const matched = adoptionIndex.takeExact(transformed);
         if (matched) {
           exactMatches++;
-        } else {
-          missing++;
-          pushSample(missingSamples, sampleForItem(transformed));
+          continue;
         }
+
+        const row = dbRowsByHistoryId.get(transformed.traktHistoryId);
+        const mapped = row?.publicmetadb_id ? publicMetaDBById.get(row.publicmetadb_id) : undefined;
+        if (row?.publicmetadb_id && !mapped) {
+          mappedMissingById++;
+          missing++;
+          pushSample(mappedMissingSamples, sampleForItem(transformed));
+          continue;
+        }
+        if (row?.publicmetadb_id && mapped) {
+          mappedChanged++;
+          pushSample(mappedChangedSamples, sampleForMappedChange(transformed, mapped));
+          continue;
+        }
+
+        missing++;
+        pushSample(missingSamples, sampleForItem(transformed));
       }
     }
 
@@ -154,9 +183,13 @@ export class SyncService {
       unresolved,
       publicMetaDBItems: existingWatched.length,
       exactMatches,
+      mappedChanged,
+      mappedMissingById,
       missing,
       dbStatusCounts,
       missingSamples,
+      mappedChangedSamples,
+      mappedMissingSamples,
       unresolvedSamples,
       duplicateHistoryIdSamples,
     };
@@ -283,6 +316,35 @@ export class SyncService {
     });
   }
 
+  private async repairMappedRow(
+    item: TransformedHistoryItem,
+    row: SyncEntryRow,
+    mappedItem: PublicMetaDBWatchedItem,
+    adoptionIndex: AdoptionIndex,
+    stats: SyncStats,
+  ): Promise<void> {
+    if (row.publicmetadb_id && samePublicMetaDBTarget(mappedItem, item)) {
+      await this.patchOrRecreate(item, row.publicmetadb_id, adoptionIndex, stats, mappedItem.watched_at);
+      return;
+    }
+
+    if (row.publicmetadb_id) {
+      this.logger.warn(`Mapped PublicMetaDB row changed identity, recreating Trakt play: ${describeHistoryItem(item)}`, {
+        traktHistoryId: item.traktHistoryId,
+        publicMetaDBId: row.publicmetadb_id,
+        actual: describePublicMetaDBItem(mappedItem),
+      });
+      try {
+        await this.publicMetaDB.deleteWatched(row.publicmetadb_id);
+      } catch (error) {
+        if (readStatus(error) !== 404) {
+          throw error;
+        }
+      }
+    }
+    await this.createOrAdopt(item, adoptionIndex, stats);
+  }
+
   private logStats(message: string, stats: SyncStats): void {
     this.logger.info(message, stats);
   }
@@ -296,6 +358,8 @@ export class SyncService {
       unresolved: report.unresolved,
       publicMetaDBItems: report.publicMetaDBItems,
       exactMatches: report.exactMatches,
+      mappedChanged: report.mappedChanged,
+      mappedMissingById: report.mappedMissingById,
       missing: report.missing,
       dbSynced: report.dbStatusCounts.synced,
       dbRetry: report.dbStatusCounts.retry,
@@ -305,6 +369,17 @@ export class SyncService {
 
     for (const sample of report.missingSamples) {
       this.logger.warn(`Audit missing from PublicMetaDB: ${sample.title} (${sample.media}) watched at ${sample.watchedAt}`, {
+        traktHistoryId: sample.traktHistoryId,
+      });
+    }
+    for (const sample of report.mappedChangedSamples) {
+      this.logger.warn(`Audit mapped PublicMetaDB row drifted: ${sample.title} expected ${sample.media} watched at ${sample.watchedAt}, got ${sample.actualMedia} watched at ${sample.actualWatchedAt ?? 'null'}`, {
+        traktHistoryId: sample.traktHistoryId,
+        publicMetaDBId: sample.publicMetaDBId,
+      });
+    }
+    for (const sample of report.mappedMissingSamples) {
+      this.logger.warn(`Audit mapped PublicMetaDB row missing by id: ${sample.title} (${sample.media}) watched at ${sample.watchedAt}`, {
         traktHistoryId: sample.traktHistoryId,
       });
     }
@@ -358,6 +433,18 @@ function sampleForRawItem(item: TraktHistoryItem, reason: string): SyncAuditSamp
   return {
     ...sampleForItem(fallback),
     reason,
+  };
+}
+
+function sampleForMappedChange(
+  item: TransformedHistoryItem,
+  actual: PublicMetaDBWatchedItem,
+): SyncAuditMappedChangeSample {
+  return {
+    ...sampleForItem(item),
+    publicMetaDBId: actual.id,
+    actualMedia: mediaLabelFromPublicMetaDB(actual),
+    actualWatchedAt: actual.watched_at,
   };
 }
 
@@ -424,6 +511,52 @@ function mediaLabel(input: Pick<TransformedHistoryItem, 'mediaType' | 'tmdbId' |
     ? ''
     : ` S${input.season}E${input.episode}`;
   return `tv tmdb:${input.tmdbId}${episode}`;
+}
+
+function mediaLabelFromPublicMetaDB(item: PublicMetaDBWatchedItem): string {
+  if (item.media_type === 'movie') {
+    return `movie tmdb:${item.tmdb_id}`;
+  }
+
+  const episode = item.season === null || item.season === undefined || item.episode === null || item.episode === undefined
+    ? ''
+    : ` S${item.season}E${item.episode}`;
+  return `tv tmdb:${item.tmdb_id}${episode}`;
+}
+
+function describePublicMetaDBItem(item: PublicMetaDBWatchedItem): string {
+  return `${mediaLabelFromPublicMetaDB(item)} watched at ${item.watched_at ?? 'null'}`;
+}
+
+function indexPublicMetaDBById(items: PublicMetaDBWatchedItem[]): Map<string, PublicMetaDBWatchedItem> {
+  return new Map(items.map((item) => [item.id, item]));
+}
+
+function indexSyncRowsByHistoryId(rows: SyncEntryRow[]): Map<number, SyncEntryRow> {
+  return new Map(rows.map((row) => [row.trakt_history_id, row]));
+}
+
+function publicMetaDBItemMatches(item: PublicMetaDBWatchedItem, expected: TransformedHistoryItem): boolean {
+  return watchedKey({
+    mediaType: item.media_type,
+    tmdbId: item.tmdb_id,
+    season: item.season ?? null,
+    episode: item.episode ?? null,
+    watchedAt: item.watched_at,
+  }) === watchedKey({
+    mediaType: expected.mediaType,
+    tmdbId: expected.tmdbId,
+    season: expected.season,
+    episode: expected.episode,
+    watchedAt: expected.watchedAt,
+  });
+}
+
+function samePublicMetaDBTarget(item: PublicMetaDBWatchedItem, expected: TransformedHistoryItem): boolean {
+  return item.media_type === expected.mediaType
+    && item.tmdb_id === expected.tmdbId
+    && (item.season ?? null) === expected.season
+    && (item.episode ?? null) === expected.episode;
 }
 
 function parseSourcePayload(payload: string | null): TraktHistoryItem {
