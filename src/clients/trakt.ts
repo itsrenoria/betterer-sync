@@ -184,9 +184,11 @@ export class TraktClient implements TraktClientLike {
 
   private jsonHeaders(authed: boolean, accessToken?: string): HeadersInit {
     return {
+      accept: 'application/json',
       'content-type': 'application/json',
       'trakt-api-version': '2',
       'trakt-api-key': this.clientId,
+      'user-agent': 'betterer-sync/0.1.0 (+https://github.com/itsrenoria/betterer-sync)',
       ...(authed && accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
     };
   }
