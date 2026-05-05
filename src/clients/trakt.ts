@@ -103,7 +103,6 @@ export class TraktClient implements TraktClientLike {
 
     for (;;) {
       let oldestWatchedAt: string | null = null;
-      let lastPageLength = 0;
 
       for (let page = 1; ; page++) {
         const { data, response } = await this.requestAuthed<TraktHistoryItem[]>(path, {
@@ -117,7 +116,6 @@ export class TraktClient implements TraktClientLike {
           return;
         }
 
-        lastPageLength = data.length;
         oldestWatchedAt = olderTimestamp(oldestWatchedAt, oldestTimestamp(data));
         const unseen = data.filter((item) => {
           if (seenHistoryIds.has(item.id)) {
@@ -139,7 +137,7 @@ export class TraktClient implements TraktClientLike {
         }
       }
 
-      if (options.startAt || lastPageLength < limit) {
+      if (options.startAt) {
         return;
       }
 

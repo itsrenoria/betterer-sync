@@ -132,6 +132,9 @@ describe('TraktClient headers', () => {
         return Response.json([], { headers: { 'X-Pagination-Page-Count': '1' } });
       }
       if (parsed.searchParams.has('end_at')) {
+        if (parsed.searchParams.get('end_at') !== '2024-03-09T11:59:59.999Z') {
+          return Response.json([], { headers: { 'X-Pagination-Page-Count': '1' } });
+        }
         return Response.json([
           historyItem(3, '2024-03-08T12:00:00.000Z'),
         ], { headers: { 'X-Pagination-Page-Count': '1' } });
@@ -168,8 +171,59 @@ describe('TraktClient headers', () => {
     const movieUrls = urls
       .map((url) => new URL(url))
       .filter((url) => url.pathname === '/sync/history/movies');
-    expect(movieUrls).toHaveLength(2);
+    expect(movieUrls).toHaveLength(3);
     expect(movieUrls[1].searchParams.get('end_at')).toBe('2024-03-09T11:59:59.999Z');
+  });
+
+  it('probes older history windows even when Trakt returns a partial capped slice', async () => {
+    const urls: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string, _init?: RequestInit) => {
+      urls.push(url);
+      const parsed = new URL(url);
+      if (parsed.pathname === '/sync/history/episodes') {
+        return Response.json([], { headers: { 'X-Pagination-Page-Count': '1' } });
+      }
+      if (parsed.searchParams.has('end_at')) {
+        if (parsed.searchParams.get('end_at') !== '2023-03-01T11:59:59.999Z') {
+          return Response.json([], { headers: { 'X-Pagination-Page-Count': '1' } });
+        }
+        return Response.json([
+          historyItem(2, '2023-02-28T09:34:00.000Z'),
+        ], { headers: { 'X-Pagination-Page-Count': '1' } });
+      }
+      return Response.json([
+        historyItem(1, '2023-03-01T12:00:00.000Z'),
+      ], { headers: { 'X-Pagination-Page-Count': '1' } });
+    }));
+
+    const db = {
+      getToken: vi.fn(() => ({
+        access_token: 'access-token',
+        refresh_token: 'refresh-token',
+        token_type: 'bearer',
+        scope: 'public',
+        expires_at: Math.floor(Date.now() / 1000) + 3600,
+      })),
+    };
+    const client = new TraktClient({
+      baseUrl: 'https://api.trakt.tv',
+      clientId: 'client-id',
+      clientSecret: 'client-secret',
+      redirectUri: 'urn:ietf:wg:oauth:2.0:oob',
+      db: db as never,
+    });
+
+    const ids: number[] = [];
+    for await (const page of client.getHistory({ limit: 100 })) {
+      ids.push(...page.map((item) => item.id));
+    }
+
+    expect(ids).toEqual([1, 2]);
+    const movieUrls = urls
+      .map((url) => new URL(url))
+      .filter((url) => url.pathname === '/sync/history/movies');
+    expect(movieUrls).toHaveLength(3);
+    expect(movieUrls[1].searchParams.get('end_at')).toBe('2023-03-01T11:59:59.999Z');
   });
 });
 
