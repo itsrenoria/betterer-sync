@@ -185,22 +185,22 @@ describe('SyncService', () => {
 
   it('audits mapped PublicMetaDB rows before anonymous exact adoption', async () => {
     publicMetaDB.watched = [
-      { id: 'pm_mapped', tmdb_id: 550, media_type: 'movie', season: null, episode: null, watched_at: '2024-03-10 08:15:00.000Z' },
+      { id: 'pm_mapped', tmdb_id: 980431, media_type: 'movie', season: null, episode: null, watched_at: '2026-04-21 15:44:00.000Z' },
     ];
     db.upsertSyncedEntry({
       kind: 'ok',
       traktHistoryId: 2,
       mediaType: 'movie',
-      tmdbId: 550,
+      tmdbId: 980431,
       season: null,
       episode: null,
-      watchedAt: '2024-03-10T08:15:00.000Z',
+      watchedAt: '2026-04-21T15:44:00.000Z',
       action: 'watch',
-      source: movie(2, 550, '2024-03-10T08:15:00.000Z'),
+      source: movie(2, 980431, '2026-04-21T15:44:00.000Z'),
     }, 'pm_mapped');
     trakt.history = [
-      movie(1, 550, '2024-03-10T08:15:00.000Z'),
-      movie(2, 550, '2024-03-10T08:15:00.000Z'),
+      movie(1, 980431, '2026-04-21T15:44:00.000Z'),
+      movie(2, 980431, '2026-04-21T15:44:00.000Z'),
     ];
 
     const report = await service.audit();

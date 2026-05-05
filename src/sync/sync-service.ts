@@ -691,8 +691,21 @@ function normalizeTimestamp(value: string | null): string {
   if (value === null) {
     return 'null';
   }
-  const parsed = Date.parse(value);
-  return Number.isFinite(parsed) ? new Date(parsed).toISOString() : value;
+  const trimmed = value.trim();
+  const parsed = Date.parse(canonicalizeExplicitOffsetTimestamp(trimmed) ?? trimmed);
+  return Number.isFinite(parsed) ? new Date(parsed).toISOString() : trimmed;
+}
+
+function canonicalizeExplicitOffsetTimestamp(value: string): string | null {
+  const match = value.match(/^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})(\.\d+)?(Z|[+-]\d{2}:?\d{2})$/i);
+  if (!match) {
+    return null;
+  }
+
+  const zone = match[4].toUpperCase() === 'Z'
+    ? 'Z'
+    : match[4].replace(/^([+-]\d{2})(\d{2})$/, '$1:$2');
+  return `${match[1]}T${match[2]}${match[3] ?? ''}${zone}`;
 }
 
 function readStatus(error: unknown): number | undefined {
