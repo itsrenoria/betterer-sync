@@ -185,15 +185,15 @@ describe('TraktClient headers', () => {
       }
       if (parsed.searchParams.has('end_at')) {
         if (parsed.searchParams.get('end_at') !== '2023-03-01T11:59:59.999Z') {
-          return Response.json([], { headers: { 'X-Pagination-Page-Count': '1' } });
+          return Response.json([]);
         }
         return Response.json([
           historyItem(2, '2023-02-28T09:34:00.000Z'),
-        ], { headers: { 'X-Pagination-Page-Count': '1' } });
+        ], { headers: { 'X-Pagination-Page-Count': '41' } });
       }
       return Response.json([
         historyItem(1, '2023-03-01T12:00:00.000Z'),
-      ], { headers: { 'X-Pagination-Page-Count': '1' } });
+      ], { headers: { 'X-Pagination-Page-Count': '58' } });
     }));
 
     const db = {

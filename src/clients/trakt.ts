@@ -133,7 +133,10 @@ export class TraktClient implements TraktClientLike {
           break;
         }
         if (data.length < limit) {
-          return;
+          if (options.startAt) {
+            return;
+          }
+          break;
         }
       }
 
