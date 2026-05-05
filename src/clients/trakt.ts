@@ -144,7 +144,9 @@ export class TraktClient implements TraktClientLike {
         return;
       }
 
-      const nextEndAt = beforeTimestamp(oldestWatchedAt);
+      const nextEndAt = oldestWatchedAt === endAt
+        ? beforeTimestamp(oldestWatchedAt)
+        : oldestWatchedAt;
       if (!nextEndAt || nextEndAt === endAt) {
         return;
       }

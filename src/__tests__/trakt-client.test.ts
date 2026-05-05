@@ -132,7 +132,7 @@ describe('TraktClient headers', () => {
         return Response.json([], { headers: { 'X-Pagination-Page-Count': '1' } });
       }
       if (parsed.searchParams.has('end_at')) {
-        if (parsed.searchParams.get('end_at') !== '2024-03-09T11:59:59.999Z') {
+        if (parsed.searchParams.get('end_at') !== '2024-03-09T12:00:00.000Z') {
           return Response.json([], { headers: { 'X-Pagination-Page-Count': '1' } });
         }
         return Response.json([
@@ -172,7 +172,7 @@ describe('TraktClient headers', () => {
       .map((url) => new URL(url))
       .filter((url) => url.pathname === '/sync/history/movies');
     expect(movieUrls).toHaveLength(3);
-    expect(movieUrls[1].searchParams.get('end_at')).toBe('2024-03-09T11:59:59.999Z');
+    expect(movieUrls[1].searchParams.get('end_at')).toBe('2024-03-09T12:00:00.000Z');
   });
 
   it('probes older history windows even when Trakt returns a partial capped slice', async () => {
@@ -184,7 +184,7 @@ describe('TraktClient headers', () => {
         return Response.json([], { headers: { 'X-Pagination-Page-Count': '1' } });
       }
       if (parsed.searchParams.has('end_at')) {
-        if (parsed.searchParams.get('end_at') !== '2023-03-01T11:59:59.999Z') {
+        if (parsed.searchParams.get('end_at') !== '2023-03-01T12:00:00.000Z') {
           return Response.json([]);
         }
         return Response.json([
@@ -223,7 +223,7 @@ describe('TraktClient headers', () => {
       .map((url) => new URL(url))
       .filter((url) => url.pathname === '/sync/history/movies');
     expect(movieUrls).toHaveLength(3);
-    expect(movieUrls[1].searchParams.get('end_at')).toBe('2023-03-01T11:59:59.999Z');
+    expect(movieUrls[1].searchParams.get('end_at')).toBe('2023-03-01T12:00:00.000Z');
   });
 });
 
