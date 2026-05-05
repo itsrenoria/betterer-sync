@@ -98,27 +98,56 @@ export class TraktClient implements TraktClientLike {
     options: { startAt?: string; endAt?: string; limit?: number },
   ): AsyncGenerator<TraktHistoryItem[]> {
     const limit = options.limit ?? 100;
-    for (let page = 1; ; page++) {
-      const { data, response } = await this.requestAuthed<TraktHistoryItem[]>(path, {
-        page,
-        limit,
-        ...(options.startAt ? { start_at: options.startAt } : {}),
-        ...(options.endAt ? { end_at: options.endAt } : {}),
-      });
+    const seenHistoryIds = new Set<number>();
+    let endAt = options.endAt;
 
-      if (data.length === 0) {
+    for (;;) {
+      let oldestWatchedAt: string | null = null;
+      let lastPageLength = 0;
+
+      for (let page = 1; ; page++) {
+        const { data, response } = await this.requestAuthed<TraktHistoryItem[]>(path, {
+          page,
+          limit,
+          ...(options.startAt ? { start_at: options.startAt } : {}),
+          ...(endAt ? { end_at: endAt } : {}),
+        });
+
+        if (data.length === 0) {
+          return;
+        }
+
+        lastPageLength = data.length;
+        oldestWatchedAt = olderTimestamp(oldestWatchedAt, oldestTimestamp(data));
+        const unseen = data.filter((item) => {
+          if (seenHistoryIds.has(item.id)) {
+            return false;
+          }
+          seenHistoryIds.add(item.id);
+          return true;
+        });
+        if (unseen.length > 0) {
+          yield unseen;
+        }
+
+        const pageCount = Number(response.headers.get('X-Pagination-Page-Count'));
+        if (Number.isFinite(pageCount) && page >= pageCount) {
+          break;
+        }
+        if (data.length < limit) {
+          return;
+        }
+      }
+
+      if (options.startAt || lastPageLength < limit) {
         return;
       }
 
-      yield data;
-
-      const pageCount = Number(response.headers.get('X-Pagination-Page-Count'));
-      if (Number.isFinite(pageCount) && page >= pageCount) {
+      const nextEndAt = beforeTimestamp(oldestWatchedAt);
+      if (!nextEndAt || nextEndAt === endAt) {
         return;
       }
-      if (data.length < limit) {
-        return;
-      }
+      endAt = nextEndAt;
     }
   }
 
@@ -212,4 +241,38 @@ export class TraktClient implements TraktClientLike {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function oldestTimestamp(items: TraktHistoryItem[]): string | null {
+  return items.reduce<string | null>((oldest, item) => olderTimestamp(oldest, item.watched_at), null);
+}
+
+function olderTimestamp(left: string | null, right: string | null): string | null {
+  if (!left) {
+    return right;
+  }
+  if (!right) {
+    return left;
+  }
+
+  const leftMs = Date.parse(left);
+  const rightMs = Date.parse(right);
+  if (!Number.isFinite(leftMs)) {
+    return right;
+  }
+  if (!Number.isFinite(rightMs)) {
+    return left;
+  }
+  return rightMs < leftMs ? right : left;
+}
+
+function beforeTimestamp(value: string | null): string | null {
+  if (!value) {
+    return null;
+  }
+  const parsed = Date.parse(value);
+  if (!Number.isFinite(parsed)) {
+    return null;
+  }
+  return new Date(parsed - 1).toISOString();
 }
