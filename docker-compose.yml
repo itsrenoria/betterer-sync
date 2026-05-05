@@ -1,5 +1,6 @@
 services:
   betterer-sync:
+    container_name: betterer-sync
     build: .
     env_file:
       - .env
