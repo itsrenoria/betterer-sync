@@ -58,12 +58,42 @@ export async function requestJsonWithResponse<T = unknown>(
     }
 
     throw new ApiError(
-      `HTTP ${response.status} for ${url}`,
+      apiErrorMessage(response.status, url, body),
       response.status,
       body,
       retryable,
     );
   }
+}
+
+function apiErrorMessage(status: number, url: string, body: unknown): string {
+  const detail = responseBodyDetail(body);
+  return detail
+    ? `HTTP ${status} for ${url}: ${detail}`
+    : `HTTP ${status} for ${url}`;
+}
+
+function responseBodyDetail(body: unknown): string | null {
+  if (body === undefined || body === null) {
+    return null;
+  }
+  if (typeof body === 'string') {
+    return body.slice(0, 500);
+  }
+  if (typeof body === 'object') {
+    const record = body as Record<string, unknown>;
+    const direct = record.error ?? record.message ?? record.description;
+    if (typeof direct === 'string') {
+      return direct;
+    }
+
+    try {
+      return JSON.stringify(body).slice(0, 500);
+    } catch {
+      return null;
+    }
+  }
+  return String(body);
 }
 
 async function parseResponseBody(response: Response): Promise<unknown> {

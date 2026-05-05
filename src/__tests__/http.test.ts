@@ -23,4 +23,14 @@ describe('requestJson', () => {
     await expect(requestJson('https://example.test', { fetchImpl, sleep: async () => {}, maxRetries: 1 }))
       .rejects.toBeInstanceOf(ApiError);
   });
+
+  it('includes response body details in API error messages', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(Response.json(
+      { error: 'Forbidden - invalid API key or unapproved app' },
+      { status: 403 },
+    ));
+
+    await expect(requestJson('https://example.test/oauth/device/code', { fetchImpl }))
+      .rejects.toThrow('Forbidden - invalid API key or unapproved app');
+  });
 });
