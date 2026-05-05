@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { HealthState, renderHealthDashboard } from '../server/health.js';
+import { type AddressInfo } from 'node:net';
+import { HealthState, startHealthServer } from '../server/health.js';
 
 describe('HealthState', () => {
   it('reports unhealthy after a failed run and includes concise counters', () => {
@@ -28,7 +29,7 @@ describe('HealthState', () => {
     });
   });
 
-  it('renders a human dashboard for the root page while keeping healthz as the data source', () => {
+  it('keeps the root page closed while healthz remains available', async () => {
     const health = new HealthState();
     health.recordRun({
       ok: true,
@@ -41,12 +42,19 @@ describe('HealthState', () => {
       deleted: 0,
     });
 
-    const html = renderHealthDashboard(health.snapshot());
+    const server = startHealthServer(health, 0);
+    const port = (server.address() as AddressInfo).port;
 
-    expect(html).toContain('<!doctype html>');
-    expect(html).toContain('Betterer Sync');
-    expect(html).toContain('/healthz');
-    expect(html).toContain('data-stat="imported"');
-    expect(html).toContain('1499');
+    try {
+      const root = await fetch(`http://127.0.0.1:${port}/`);
+      const healthz = await fetch(`http://127.0.0.1:${port}/healthz`);
+
+      expect(root.status).toBe(404);
+      expect(await root.json()).toEqual({ ok: false, error: 'not found' });
+      expect(healthz.status).toBe(200);
+      expect(await healthz.json()).toMatchObject({ ok: true });
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
   });
 });

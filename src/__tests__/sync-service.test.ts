@@ -97,6 +97,31 @@ describe('SyncService', () => {
     ]);
   });
 
+  it('logs human-readable sync events for Dozzle', async () => {
+    const messages: string[] = [];
+    const logService = new SyncService({
+      db,
+      trakt,
+      publicMetaDB,
+      logger: {
+        debug: (message) => messages.push(message),
+        info: (message) => messages.push(message),
+        warn: (message) => messages.push(message),
+        error: (message) => messages.push(message),
+      },
+    });
+    trakt.history = [
+      movie(1, 550, '2024-03-10T08:15:00Z'),
+    ];
+
+    await logService.syncRecent(10);
+
+    expect(messages).toContain('Found new Trakt play: Movie 550 (movie tmdb:550) watched at 2024-03-10T08:15:00Z');
+    expect(messages).toContain('Added to PublicMetaDB: Movie 550 (movie tmdb:550) watched at 2024-03-10T08:15:00Z');
+    expect(messages).toContain('recent sync complete');
+    expect(messages).not.toContain('backfill complete');
+  });
+
   it('adopts an exact existing PublicMetaDB play instead of duplicating it', async () => {
     publicMetaDB.watched = [
       { id: 'manual-but-exact', tmdb_id: 550, media_type: 'movie', season: null, episode: null, watched_at: '2024-03-10T08:15:00Z' },

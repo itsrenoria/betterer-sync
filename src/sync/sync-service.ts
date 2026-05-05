@@ -35,7 +35,7 @@ export class SyncService {
     this.pageLimit = deps.pageLimit ?? 100;
   }
 
-  async backfill(options: { startAt?: string } = {}): Promise<SyncStats> {
+  async backfill(options: { startAt?: string; completeMessage?: string } = {}): Promise<SyncStats> {
     const stats = emptyStats();
     const existingWatched = await this.publicMetaDB.getAllWatched();
     const adoptionIndex = new AdoptionIndex(existingWatched);
@@ -44,14 +44,14 @@ export class SyncService {
       await this.syncPage(page, adoptionIndex, stats);
     }
 
-    this.db.setState('last_backfill_at', new Date().toISOString());
-    this.logStats('backfill complete', stats);
+    this.db.setState(options.startAt ? 'last_recent_sync_at' : 'last_backfill_at', new Date().toISOString());
+    this.logStats(options.completeMessage ?? 'backfill complete', stats);
     return stats;
   }
 
   async syncRecent(overlapMinutes: number): Promise<SyncStats> {
     const startAt = new Date(Date.now() - overlapMinutes * 60_000).toISOString();
-    return this.backfill({ startAt });
+    return this.backfill({ startAt, completeMessage: 'recent sync complete' });
   }
 
   async reconcile(): Promise<SyncStats> {
@@ -98,6 +98,9 @@ export class SyncService {
       if (transformed.kind === 'retry') {
         this.db.markRetry(transformed.traktHistoryId, transformed.source, transformed.reason);
         stats.retried++;
+        this.logger.warn(`Retry queued: ${describeRawHistoryItem(transformed.source)} (${transformed.reason})`, {
+          traktHistoryId: transformed.traktHistoryId,
+        });
         continue;
       }
 
@@ -106,7 +109,7 @@ export class SyncService {
       } catch (error) {
         this.db.markFailed(transformed.traktHistoryId, toErrorMessage(error));
         stats.failed++;
-        this.logger.error('failed to sync Trakt history item', {
+        this.logger.error(`Failed to sync Trakt play: ${describeHistoryItem(transformed)}`, {
           traktHistoryId: transformed.traktHistoryId,
           error: toErrorMessage(error),
         });
@@ -122,7 +125,7 @@ export class SyncService {
     const existing = this.db.getSyncEntry(item.traktHistoryId);
     if (existing?.sync_status === 'synced' && existing.publicmetadb_id) {
       if (existing.watched_at !== item.watchedAt) {
-        await this.patchOrRecreate(item, existing.publicmetadb_id, adoptionIndex, stats);
+        await this.patchOrRecreate(item, existing.publicmetadb_id, adoptionIndex, stats, existing.watched_at);
         return;
       }
 
@@ -131,6 +134,9 @@ export class SyncService {
       return;
     }
 
+    this.logger.info(`Found new Trakt play: ${describeHistoryItem(item)}`, {
+      traktHistoryId: item.traktHistoryId,
+    });
     await this.createOrAdopt(item, adoptionIndex, stats);
   }
 
@@ -139,11 +145,16 @@ export class SyncService {
     publicMetaDBId: string,
     adoptionIndex: AdoptionIndex,
     stats: SyncStats,
+    previousWatchedAt: string | null,
   ): Promise<void> {
     try {
       await this.publicMetaDB.patchWatched(publicMetaDBId, { watched_at: item.watchedAt });
       this.db.upsertSyncedEntry(item, publicMetaDBId);
       stats.updated++;
+      this.logger.info(`Updated PublicMetaDB timestamp: ${describeHistoryItem(item)} (${previousWatchedAt ?? 'unknown time'} -> ${item.watchedAt})`, {
+        traktHistoryId: item.traktHistoryId,
+        publicMetaDBId,
+      });
     } catch (error) {
       if (readStatus(error) !== 404) {
         throw error;
@@ -161,12 +172,20 @@ export class SyncService {
     if (adopted) {
       this.db.upsertSyncedEntry(item, adopted.id);
       stats.adopted++;
+      this.logger.info(`Adopted existing PublicMetaDB play: ${describeHistoryItem(item)}`, {
+        traktHistoryId: item.traktHistoryId,
+        publicMetaDBId: adopted.id,
+      });
       return;
     }
 
     const created = await this.publicMetaDB.createWatched(toPublicMetaDBInput(item));
     this.db.upsertSyncedEntry(item, created.id);
     stats.imported++;
+    this.logger.info(`Added to PublicMetaDB: ${describeHistoryItem(item)}`, {
+      traktHistoryId: item.traktHistoryId,
+      publicMetaDBId: created.id,
+    });
   }
 
   private async deleteMirroredRow(row: SyncEntryRow, stats: SyncStats): Promise<void> {
@@ -181,6 +200,10 @@ export class SyncService {
     }
     this.db.markDeleted(row.trakt_history_id);
     stats.deleted++;
+    this.logger.info(`Removed from PublicMetaDB because Trakt history item is gone: ${describeSyncRow(row)}`, {
+      traktHistoryId: row.trakt_history_id,
+      publicMetaDBId: row.publicmetadb_id,
+    });
   }
 
   private logStats(message: string, stats: SyncStats): void {
@@ -196,6 +219,112 @@ function toPublicMetaDBInput(item: TransformedHistoryItem) {
     ...(item.episode === null ? {} : { episode: item.episode }),
     watched_at: item.watchedAt,
   };
+}
+
+function describeHistoryItem(item: TransformedHistoryItem): string {
+  return `${titleFromSource(item.source, item)} (${mediaLabel(item)}) watched at ${item.watchedAt}`;
+}
+
+function describeRawHistoryItem(item: TraktHistoryItem): string {
+  const fallback: TransformedHistoryItem = {
+    kind: 'ok',
+    traktHistoryId: item.id,
+    mediaType: item.type === 'movie' ? 'movie' : 'tv',
+    tmdbId: readNumber(readIdsFromRaw(item).tmdb) ?? 0,
+    season: readNumber(readRecord(item.episode).season),
+    episode: readNumber(readRecord(item.episode).number),
+    watchedAt: item.watched_at,
+    action: typeof item.action === 'string' ? item.action : null,
+    source: item,
+  };
+  return describeHistoryItem(fallback);
+}
+
+function describeSyncRow(row: SyncEntryRow): string {
+  const source = parseSourcePayload(row.source_payload);
+  const item: TransformedHistoryItem = {
+    kind: 'ok',
+    traktHistoryId: row.trakt_history_id,
+    mediaType: row.media_type ?? 'movie',
+    tmdbId: row.tmdb_id ?? 0,
+    season: row.season,
+    episode: row.episode,
+    watchedAt: row.watched_at ?? 'unknown time',
+    action: row.action,
+    source,
+  };
+  return describeHistoryItem(item);
+}
+
+function titleFromSource(source: TraktHistoryItem, item: TransformedHistoryItem): string {
+  const movie = readRecord(source.movie);
+  const show = readRecord(source.show);
+  const episode = readRecord(source.episode);
+  const movieTitle = readString(movie.title);
+  const showTitle = readString(show.title);
+  const episodeTitle = readString(episode.title);
+
+  if (item.mediaType === 'movie') {
+    return movieTitle ?? `Movie ${item.tmdbId}`;
+  }
+  if (showTitle && episodeTitle) {
+    return `${showTitle} - ${episodeTitle}`;
+  }
+  return showTitle ?? `TV ${item.tmdbId}`;
+}
+
+function mediaLabel(input: Pick<TransformedHistoryItem, 'mediaType' | 'tmdbId' | 'season' | 'episode'>): string {
+  if (input.mediaType === 'movie') {
+    return `movie tmdb:${input.tmdbId}`;
+  }
+
+  const episode = input.season === null || input.episode === null
+    ? ''
+    : ` S${input.season}E${input.episode}`;
+  return `tv tmdb:${input.tmdbId}${episode}`;
+}
+
+function parseSourcePayload(payload: string | null): TraktHistoryItem {
+  if (!payload) {
+    return { id: 0, type: 'unknown', watched_at: 'unknown time' };
+  }
+  try {
+    const parsed = JSON.parse(payload);
+    if (parsed && typeof parsed === 'object') {
+      return parsed as TraktHistoryItem;
+    }
+  } catch {
+    // Fall through to a minimal placeholder so deletion logs still explain the row.
+  }
+  return { id: 0, type: 'unknown', watched_at: 'unknown time' };
+}
+
+function readIdsFromRaw(item: TraktHistoryItem): Record<string, unknown> {
+  if (item.type === 'movie') {
+    return readRecord(readRecord(item.movie).ids);
+  }
+  return readRecord(readRecord(item.show).ids);
+}
+
+function readRecord(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === 'object'
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function readString(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+function readNumber(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
 }
 
 class AdoptionIndex {

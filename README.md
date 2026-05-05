@@ -42,7 +42,7 @@ Run continuously:
 docker compose up -d
 ```
 
-Check health:
+Check health. The root path intentionally does not serve a UI; `/healthz` is the Docker health endpoint.
 
 ```bash
 curl http://localhost:3000/healthz
@@ -72,6 +72,7 @@ docker compose up -d
 - `DATABASE_PATH`: Optional, default `/data/sync.db`.
 - `PORT`: Optional, default `3000`.
 - `RUN_BACKFILL_ON_START`: Optional, set `false` if you only want polling/reconciliation on startup.
+- `LOG_FORMAT`: Optional, default `text` for human-readable Dozzle logs. Set `json` for structured logs.
 
 ## Edge-Case Behavior
 
