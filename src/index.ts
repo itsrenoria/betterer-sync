@@ -2,7 +2,9 @@ import { createDatabase } from './storage/database.js';
 import { loadAuthConfig, loadConfig } from './config.js';
 import { TraktClient } from './clients/trakt.js';
 import { PublicMetaDBClient } from './clients/publicmetadb.js';
+import { MDBListClient } from './clients/mdblist.js';
 import { SyncService } from './sync/sync-service.js';
+import { WatchlistSyncService } from './sync/watchlist-sync-service.js';
 import { HealthState, startHealthServer } from './server/health.js';
 import { logger } from './logger.js';
 import type { SyncStats } from './sync/types.js';
@@ -40,6 +42,14 @@ async function main(): Promise<void> {
     await withService(async (service) => {
       await service.audit();
     });
+    return;
+  }
+
+  if (command === 'sync-watchlist') {
+    const config = loadConfig();
+    const service = makeWatchlistService(config);
+    const stats = await service.sync();
+    logger.info('watchlist sync finished', stats);
     return;
   }
 
@@ -83,6 +93,9 @@ async function runServe(): Promise<void> {
   const config = loadConfig();
   const db = createDatabase(config.databasePath);
   const service = makeService(config, db);
+  const watchlistService = config.mdbListWatchlistSyncEnabled
+    ? makeWatchlistService(config)
+    : null;
   const health = new HealthState();
   const server = startHealthServer(health, config.port);
   let running = false;
@@ -107,12 +120,18 @@ async function runServe(): Promise<void> {
   };
 
   logger.info('health server listening', { port: config.port });
-  if (config.runBackfillOnStart) {
-    await run('startup backfill', () => service.backfill());
+  if (config.runBackfillOnStart || watchlistService) {
+    await run('startup sync', async () => combineStats([
+      config.runBackfillOnStart ? await service.backfill() : zeroStats(),
+      watchlistService ? await watchlistService.sync() : zeroStats(),
+    ]));
   }
 
   const pollTimer = setInterval(() => {
-    void run('recent sync', () => service.syncRecent(config.historyOverlapMinutes));
+    void run('poll sync', async () => combineStats([
+      await service.syncRecent(config.historyOverlapMinutes),
+      watchlistService ? await watchlistService.sync() : zeroStats(),
+    ]));
   }, config.pollIntervalSeconds * 1000);
 
   const reconcileTimer = setInterval(() => {
@@ -168,6 +187,37 @@ function makeService(config: ReturnType<typeof loadConfig>, db: ReturnType<typeo
   });
 }
 
+function makeWatchlistService(config: ReturnType<typeof loadConfig>): WatchlistSyncService {
+  if (!config.mdbListApiKey) {
+    throw new Error('Missing required environment variable MDBLIST_API_KEY');
+  }
+
+  return new WatchlistSyncService({
+    mdbList: new MDBListClient({
+      baseUrl: config.mdbListBaseUrl,
+      apiKey: config.mdbListApiKey,
+      logger,
+    }),
+    publicMetaDB: new PublicMetaDBClient({
+      baseUrl: config.publicMetaDBBaseUrl,
+      apiKey: config.publicMetaDBApiKey,
+    }),
+    logger,
+  });
+}
+
+function combineStats(statsList: SyncStats[]): SyncStats {
+  return statsList.reduce((combined, stats) => ({
+    imported: combined.imported + stats.imported,
+    adopted: combined.adopted + stats.adopted,
+    updated: combined.updated + stats.updated,
+    skipped: combined.skipped + stats.skipped,
+    retried: combined.retried + stats.retried,
+    failed: combined.failed + stats.failed,
+    deleted: combined.deleted + stats.deleted,
+  }), zeroStats());
+}
+
 function zeroStats(): SyncStats {
   return {
     imported: 0,
@@ -188,6 +238,8 @@ Commands:
   backfill   Import all Trakt watch history into PublicMetaDB
   reconcile  Run a full mirror reconciliation
   audit      Compare Trakt, local sync state, and PublicMetaDB without changing anything
+  sync-watchlist
+             Mirror MDBList watchlist into PublicMetaDB watchlist
   serve      Run startup backfill, polling sync, reconciliation, and /healthz
 `);
 }

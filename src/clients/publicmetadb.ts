@@ -3,7 +3,10 @@ import type {
   MediaType,
   PublicMetaDBClientLike,
   PublicMetaDBCreateWatchedInput,
+  PublicMetaDBList,
+  PublicMetaDBListItem,
   PublicMetaDBWatchedItem,
+  WatchlistMediaItem,
 } from '../sync/types.js';
 
 type PublicMetaDBOptions = {
@@ -72,6 +75,64 @@ export class PublicMetaDBClient implements PublicMetaDBClientLike {
     });
   }
 
+  async getOrCreateWatchlist(): Promise<PublicMetaDBList> {
+    const lists = await this.getAllLists();
+    const watchlist = lists.find((list) => list.type === 'watchlist');
+    if (watchlist) {
+      return watchlist;
+    }
+
+    return this.createList({
+      name: 'My Watchlist',
+      description: 'Synced from MDBList by betterer-sync',
+      is_public: false,
+      type: 'watchlist',
+    });
+  }
+
+  async getAllListItems(listId: string): Promise<PublicMetaDBListItem[]> {
+    const items: PublicMetaDBListItem[] = [];
+    const perPage = 500;
+
+    for (let page = 1; ; page++) {
+      const response = await requestJson<{
+        items?: PublicMetaDBListItem[];
+        totalPages?: number;
+      }>(this.url(`/api/external/lists/${encodeURIComponent(listId)}/items`, { page, perPage }), {
+        headers: this.authHeaders(),
+      });
+
+      const pageItems = response.items ?? [];
+      items.push(...pageItems);
+
+      if (pageItems.length === 0 || (response.totalPages !== undefined && page >= response.totalPages)) {
+        return items;
+      }
+    }
+  }
+
+  async addListItem(listId: string, item: WatchlistMediaItem): Promise<PublicMetaDBListItem> {
+    const response = await requestJson<{ item?: PublicMetaDBListItem } & PublicMetaDBListItem>(
+      this.url(`/api/external/lists/${encodeURIComponent(listId)}/items`),
+      {
+        method: 'POST',
+        headers: this.jsonHeaders(),
+        body: JSON.stringify({
+          tmdb_id: item.tmdbId,
+          media_type: item.mediaType,
+        }),
+      },
+    );
+    return response.item ?? response;
+  }
+
+  async deleteListItem(listId: string, itemId: string): Promise<void> {
+    await requestJson(this.url(`/api/external/lists/${encodeURIComponent(listId)}/items/${encodeURIComponent(itemId)}`), {
+      method: 'DELETE',
+      headers: this.authHeaders(),
+    });
+  }
+
   async lookupTmdbId(idType: string, idValue: string, mediaType: MediaType): Promise<number | null> {
     try {
       const response = await requestJson<{
@@ -112,5 +173,43 @@ export class PublicMetaDBClient implements PublicMetaDBClientLike {
       ...this.authHeaders(),
       'content-type': 'application/json',
     };
+  }
+
+  private async getAllLists(): Promise<PublicMetaDBList[]> {
+    const lists: PublicMetaDBList[] = [];
+    const perPage = 500;
+
+    for (let page = 1; ; page++) {
+      const response = await requestJson<{
+        items?: PublicMetaDBList[];
+        totalPages?: number;
+      }>(this.url('/api/external/lists', { page, perPage }), {
+        headers: this.authHeaders(),
+      });
+
+      const pageItems = response.items ?? [];
+      lists.push(...pageItems);
+
+      if (pageItems.length === 0 || (response.totalPages !== undefined && page >= response.totalPages)) {
+        return lists;
+      }
+    }
+  }
+
+  private async createList(input: {
+    name: string;
+    description?: string;
+    is_public?: boolean;
+    type?: string;
+  }): Promise<PublicMetaDBList> {
+    const response = await requestJson<{ item?: PublicMetaDBList } & PublicMetaDBList>(
+      this.url('/api/external/lists'),
+      {
+        method: 'POST',
+        headers: this.jsonHeaders(),
+        body: JSON.stringify(input),
+      },
+    );
+    return response.item ?? response;
   }
 }

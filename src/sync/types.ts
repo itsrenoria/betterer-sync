@@ -62,6 +62,38 @@ export type PublicMetaDBClientLike = TmdbResolver & {
   deleteWatched(id: string): Promise<void>;
 };
 
+export type WatchlistMediaItem = {
+  tmdbId: number;
+  mediaType: MediaType;
+};
+
+export type PublicMetaDBList = {
+  id: string;
+  name?: string;
+  description?: string;
+  slug?: string;
+  is_public?: boolean;
+  type?: string;
+};
+
+export type PublicMetaDBListItem = {
+  id: string;
+  list?: string;
+  tmdb_id: number;
+  media_type: MediaType;
+};
+
+export type PublicMetaDBWatchlistClientLike = {
+  getOrCreateWatchlist(): Promise<PublicMetaDBList>;
+  getAllListItems(listId: string): Promise<PublicMetaDBListItem[]>;
+  addListItem(listId: string, item: WatchlistMediaItem): Promise<PublicMetaDBListItem>;
+  deleteListItem(listId: string, itemId: string): Promise<void>;
+};
+
+export type MdbListClientLike = {
+  getWatchlist(): Promise<WatchlistMediaItem[]>;
+};
+
 export type SyncStats = {
   imported: number;
   adopted: number;

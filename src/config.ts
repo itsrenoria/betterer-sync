@@ -3,8 +3,10 @@ export type AppConfig = {
   traktClientSecret: string;
   traktRedirectUri: string;
   publicMetaDBApiKey: string;
+  mdbListApiKey?: string;
   traktBaseUrl: string;
   publicMetaDBBaseUrl: string;
+  mdbListBaseUrl: string;
   databasePath: string;
   pollIntervalSeconds: number;
   port: number;
@@ -12,16 +14,21 @@ export type AppConfig = {
   historyOverlapMinutes: number;
   reconcileIntervalHours: number;
   runBackfillOnStart: boolean;
+  mdbListWatchlistSyncEnabled: boolean;
 };
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
+  const mdbListWatchlistSyncEnabled = readBoolean(env.MDBLIST_WATCHLIST_SYNC_ENABLED, false);
+
   return {
     traktClientId: readRequired(env, 'TRAKT_CLIENT_ID'),
     traktClientSecret: readRequired(env, 'TRAKT_CLIENT_SECRET'),
     traktRedirectUri: env.TRAKT_REDIRECT_URI ?? 'urn:ietf:wg:oauth:2.0:oob',
     publicMetaDBApiKey: readRequired(env, 'PUBLICMETADB_API_KEY'),
+    mdbListApiKey: mdbListWatchlistSyncEnabled ? readRequired(env, 'MDBLIST_API_KEY') : env.MDBLIST_API_KEY,
     traktBaseUrl: env.TRAKT_BASE_URL ?? 'https://api.trakt.tv',
     publicMetaDBBaseUrl: env.PUBLICMETADB_BASE_URL ?? 'https://publicmetadb.com',
+    mdbListBaseUrl: env.MDBLIST_BASE_URL ?? 'https://api.mdblist.com',
     databasePath: env.DATABASE_PATH ?? '/data/sync.db',
     pollIntervalSeconds: readNumber(env.POLL_INTERVAL_SECONDS, 60),
     port: readNumber(env.PORT, 3000),
@@ -29,6 +36,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     historyOverlapMinutes: readNumber(env.HISTORY_OVERLAP_MINUTES, 10),
     reconcileIntervalHours: readNumber(env.RECONCILE_INTERVAL_HOURS, 24),
     runBackfillOnStart: env.RUN_BACKFILL_ON_START !== 'false',
+    mdbListWatchlistSyncEnabled,
   };
 }
 
@@ -59,4 +67,11 @@ function readNumber(value: string | undefined, fallback: number): number {
   }
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function readBoolean(value: string | undefined, fallback: boolean): boolean {
+  if (value === undefined) {
+    return fallback;
+  }
+  return value === 'true';
 }
