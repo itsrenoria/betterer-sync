@@ -98,14 +98,19 @@ async function runServe(): Promise<void> {
     : null;
   const health = new HealthState();
   const server = startHealthServer(health, config.port);
-  let running = false;
+  const historyRunState = { running: false };
+  const watchlistRunState = { running: false };
   let shuttingDown = false;
 
-  const run = async (label: string, task: () => Promise<SyncStats>) => {
-    if (running || shuttingDown) {
+  const run = async (
+    label: string,
+    state: { running: boolean },
+    task: () => Promise<SyncStats>,
+  ) => {
+    if (state.running || shuttingDown) {
       return;
     }
-    running = true;
+    state.running = true;
     try {
       logger.info(`${label} starting`);
       const stats = await task();
@@ -115,32 +120,38 @@ async function runServe(): Promise<void> {
       logger.error(`${label} failed`, { error: message });
       health.recordRun({ ok: false, error: message, ...zeroStats() });
     } finally {
-      running = false;
+      state.running = false;
     }
   };
 
   logger.info('health server listening', { port: config.port });
-  if (config.runBackfillOnStart || watchlistService) {
-    await run('startup sync', async () => combineStats([
-      config.runBackfillOnStart ? await service.backfill() : zeroStats(),
-      watchlistService ? await watchlistService.sync() : zeroStats(),
-    ]));
+  if (config.runBackfillOnStart) {
+    await run('startup sync', historyRunState, () => service.backfill());
+  }
+  if (watchlistService) {
+    await run('startup watchlist sync', watchlistRunState, () => watchlistService.sync());
   }
 
   const pollTimer = setInterval(() => {
-    void run('poll sync', async () => combineStats([
-      await service.syncRecent(config.historyOverlapMinutes),
-      watchlistService ? await watchlistService.sync() : zeroStats(),
-    ]));
+    void run('poll sync', historyRunState, () => service.syncRecent(config.historyOverlapMinutes));
   }, config.pollIntervalSeconds * 1000);
 
+  const watchlistTimer = watchlistService
+    ? setInterval(() => {
+      void run('watchlist sync', watchlistRunState, () => watchlistService.sync());
+    }, config.mdbListWatchlistPollIntervalSeconds * 1000)
+    : null;
+
   const reconcileTimer = setInterval(() => {
-    void run('full reconciliation', () => service.reconcile());
+    void run('full reconciliation', historyRunState, () => service.reconcile());
   }, config.reconcileIntervalHours * 60 * 60 * 1000);
 
   const shutdown = () => {
     shuttingDown = true;
     clearInterval(pollTimer);
+    if (watchlistTimer) {
+      clearInterval(watchlistTimer);
+    }
     clearInterval(reconcileTimer);
     server.close(() => {
       db.close();
@@ -204,18 +215,6 @@ function makeWatchlistService(config: ReturnType<typeof loadConfig>): WatchlistS
     }),
     logger,
   });
-}
-
-function combineStats(statsList: SyncStats[]): SyncStats {
-  return statsList.reduce((combined, stats) => ({
-    imported: combined.imported + stats.imported,
-    adopted: combined.adopted + stats.adopted,
-    updated: combined.updated + stats.updated,
-    skipped: combined.skipped + stats.skipped,
-    retried: combined.retried + stats.retried,
-    failed: combined.failed + stats.failed,
-    deleted: combined.deleted + stats.deleted,
-  }), zeroStats());
 }
 
 function zeroStats(): SyncStats {

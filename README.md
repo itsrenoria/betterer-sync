@@ -44,7 +44,7 @@ Run continuously:
 docker compose up -d
 ```
 
-Check health. The root path intentionally does not serve a UI; `/healthz` is the Docker health endpoint.
+Check health. The root path intentionally does not serve a UI; `/healthz` is the service health endpoint.
 
 ```bash
 curl http://localhost:3000/healthz
@@ -63,7 +63,7 @@ docker compose up -d
 
 `serve` is the default command. It runs a startup backfill, polls recent Trakt history every `POLL_INTERVAL_SECONDS`, and performs full reconciliation every `RECONCILE_INTERVAL_HOURS`.
 
-When `MDBLIST_WATCHLIST_SYNC_ENABLED=true`, `serve` also syncs MDBList watchlist to PublicMetaDB watchlist during startup and each polling cycle. Use `sync-watchlist` for a one-off watchlist mirror run.
+When `MDBLIST_WATCHLIST_SYNC_ENABLED=true`, `serve` also syncs MDBList watchlist to PublicMetaDB watchlist during startup and then every `MDBLIST_WATCHLIST_POLL_INTERVAL_SECONDS`. Use `sync-watchlist` for a one-off watchlist mirror run.
 
 `audit` is read-only. It fetches all Trakt movie and episode history, compares it with local sync state and PublicMetaDB watched rows, then logs counts and samples for missing, mapped-but-drifted, unresolved, failed, or duplicate history rows.
 
@@ -82,6 +82,7 @@ When `MDBLIST_WATCHLIST_SYNC_ENABLED=true`, `serve` also syncs MDBList watchlist
 - `PORT`: Optional, default `3000`.
 - `RUN_BACKFILL_ON_START`: Optional, set `false` if you only want polling/reconciliation on startup.
 - `MDBLIST_WATCHLIST_SYNC_ENABLED`: Optional, default `false`. Set `true` to mirror MDBList watchlist into PublicMetaDB watchlist during `serve`.
+- `MDBLIST_WATCHLIST_POLL_INTERVAL_SECONDS`: Optional, default `3600`, so watchlist polling stays comfortably under the MDBList free tier of 1,000 API requests per day.
 - `LOG_FORMAT`: Optional, default `text` for human-readable Dozzle logs. Set `json` for structured logs.
 
 ## Edge-Case Behavior

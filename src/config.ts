@@ -15,6 +15,7 @@ export type AppConfig = {
   reconcileIntervalHours: number;
   runBackfillOnStart: boolean;
   mdbListWatchlistSyncEnabled: boolean;
+  mdbListWatchlistPollIntervalSeconds: number;
 };
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
@@ -37,6 +38,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     reconcileIntervalHours: readNumber(env.RECONCILE_INTERVAL_HOURS, 24),
     runBackfillOnStart: env.RUN_BACKFILL_ON_START !== 'false',
     mdbListWatchlistSyncEnabled,
+    mdbListWatchlistPollIntervalSeconds: readNumber(env.MDBLIST_WATCHLIST_POLL_INTERVAL_SECONDS, 3600),
   };
 }
 

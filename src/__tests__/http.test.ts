@@ -15,6 +15,24 @@ describe('requestJson', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
+  it('does not wait on Retry-After delays longer than the retry delay cap', async () => {
+    const sleep = vi.fn(async () => {});
+    const fetchImpl = vi.fn()
+      .mockResolvedValue(new Response('Daily API limit exceeded', {
+        status: 429,
+        headers: { 'Retry-After': '50569' },
+      }));
+
+    await expect(requestJson('https://example.test', {
+      fetchImpl,
+      sleep,
+      maxRetries: 2,
+      maxRetryDelayMs: 30_000,
+    })).rejects.toMatchObject({ status: 429, retryable: true });
+    expect(sleep).not.toHaveBeenCalled();
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
   it('throws typed API errors for exhausted 5xx responses', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(new Response('Bad gateway', { status: 502 }));
 

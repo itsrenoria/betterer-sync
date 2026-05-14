@@ -3,6 +3,7 @@ export type FetchLike = typeof fetch;
 export type RequestJsonOptions = RequestInit & {
   fetchImpl?: FetchLike;
   maxRetries?: number;
+  maxRetryDelayMs?: number;
   sleep?: (ms: number) => Promise<void>;
 };
 
@@ -35,6 +36,7 @@ export async function requestJsonWithResponse<T = unknown>(
   const {
     fetchImpl = fetch,
     maxRetries = 4,
+    maxRetryDelayMs = 30_000,
     sleep = defaultSleep,
     ...requestOptions
   } = options;
@@ -53,17 +55,24 @@ export async function requestJsonWithResponse<T = unknown>(
     const body = await parseResponseBody(response);
     if (retryable && attempt < maxRetries) {
       const delay = retryDelayMs(response, attempt);
+      if (delay > maxRetryDelayMs) {
+        throw apiError(response, url, body, retryable);
+      }
       await sleep(delay);
       continue;
     }
 
-    throw new ApiError(
-      apiErrorMessage(response.status, url, body),
-      response.status,
-      body,
-      retryable,
-    );
+    throw apiError(response, url, body, retryable);
   }
+}
+
+function apiError(response: Response, url: string, body: unknown, retryable: boolean): ApiError {
+  return new ApiError(
+    apiErrorMessage(response.status, url, body),
+    response.status,
+    body,
+    retryable,
+  );
 }
 
 function apiErrorMessage(status: number, url: string, body: unknown): string {

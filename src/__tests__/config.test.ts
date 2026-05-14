@@ -29,6 +29,27 @@ describe('loadConfig MDBList watchlist settings', () => {
     expect(config.mdbListApiKey).toBe('mdb-key');
     expect(config.mdbListBaseUrl).toBe('https://mdb.example.test');
   });
+
+  it('defaults MDBList watchlist polling to an hourly free-tier-friendly cadence', () => {
+    const config = loadConfig({
+      ...baseEnv(),
+      MDBLIST_WATCHLIST_SYNC_ENABLED: 'true',
+      MDBLIST_API_KEY: 'mdb-key',
+    });
+
+    expect(config.mdbListWatchlistPollIntervalSeconds).toBe(3600);
+  });
+
+  it('allows the MDBList watchlist polling cadence to be overridden', () => {
+    const config = loadConfig({
+      ...baseEnv(),
+      MDBLIST_WATCHLIST_SYNC_ENABLED: 'true',
+      MDBLIST_API_KEY: 'mdb-key',
+      MDBLIST_WATCHLIST_POLL_INTERVAL_SECONDS: '7200',
+    });
+
+    expect(config.mdbListWatchlistPollIntervalSeconds).toBe(7200);
+  });
 });
 
 function baseEnv(): NodeJS.ProcessEnv {
