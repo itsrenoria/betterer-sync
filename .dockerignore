@@ -1,7 +1,7 @@
-node_modules
-dist
-.git
-.env
-npm-debug.log
-coverage
-.DS_Store
+*
+!package.json
+!package-lock.json
+!tsconfig.json
+!src/
+!src/**
+src/__tests__/

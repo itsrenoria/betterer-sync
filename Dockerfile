@@ -33,5 +33,8 @@ USER node
 
 EXPOSE 3000
 
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+  CMD ["node", "-e", "const value = Number(process.env.PORT); const port = Number.isFinite(value) && value > 0 ? value : 3000; fetch(`http://127.0.0.1:${port}/healthz`).then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))"]
+
 ENTRYPOINT ["node", "dist/index.js"]
 CMD ["serve"]

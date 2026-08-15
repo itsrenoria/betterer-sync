@@ -1,7 +1,7 @@
 services:
   betterer-sync:
     container_name: betterer-sync
-    build: .
+    image: ${BETTERER_SYNC_IMAGE:-ghcr.io/itsrenoria/betterer-sync:latest}
     env_file:
       - .env
     environment:
@@ -12,6 +12,11 @@ services:
     ports:
       - "3000:3000"
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "25m"
+        max-file: "4"
 
 volumes:
   betterer-sync-data:
